@@ -1,4 +1,9 @@
 #!/bin/bash
+export RAY_DISABLE_DASHBOARD=1
+export RAY_START_ARGS="--include-dashboard=false"
+export SWANLAB_API_KEY="gYbI1egFijpdmf4K0uYoS"
+export WANDB_API_KEY="a552f7169e3e6889c5c9bb37306e265b0168ae02"
+export CUDA_VISIBLE_DEVICES="6,7"
 #export VLLM_ATTENTION_BACKEND=XFORMERS
 unset VLLM_ATTENTION_BACKEND
 export VLLM_USE_V1=1
@@ -28,8 +33,8 @@ N_SAMPLES_PER_PROMPT=32
 MINI_BATCH_SIZE=1
 MICRO_BATCH_SIZE=2
 
-DATA_LOCAL_DIR="path/to/TTRL/verl/data"
-BACKBONE_PATH="path/to/${BACKBONE}"
+DATA_LOCAL_DIR="/data/yangzhenfei/TTRL/verl/data"
+BACKBONE_PATH="/data/yangzhenfei/llm_checkpoint/${BACKBONE}"
 
 MODEL="${TASK}-${BACKBONE}"
 EXPERIMENT="TTRL-Len@${K}k"
@@ -90,10 +95,10 @@ python -m verl.trainer.main_ppo \
   ttrl.enable=True \
   ttrl.n_votes_per_prompt=$N_VOTES_PER_PROMPT \
   ttrl.n_samples_per_prompt=$N_SAMPLES_PER_PROMPT \
-  trainer.logger=['console','wandb'] \
+  trainer.logger=['console','swanlab'] \
   trainer.project_name=$WANDB_PROJECT \
   trainer.experiment_name=$LOG_NAME \
-  trainer.n_gpus_per_node=8 \
+  trainer.n_gpus_per_node=2 \
   trainer.nnodes=1 \
   trainer.save_freq=2000000 \
   trainer.test_freq=2 \
