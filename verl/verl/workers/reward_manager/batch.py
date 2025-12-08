@@ -59,6 +59,17 @@ class BatchRewardManager:
         data_sources = data.non_tensor_batch[self.reward_fn_key]
         extras = data.non_tensor_batch.get("extra_info", [None] * len(data))
 
+        for i in range(len(data)):
+            valid_len = valid_response_lengths[i]
+            valid_response_ids = response_ids[i][:valid_len]
+            
+            # 确保 extras[i] 是字典
+            if extras[i] is None:
+                extras[i] = {}
+
+            # 添加 solution_token_ids
+            extras[i]["solution_token_ids"] = valid_response_ids.tolist()
+
         scores = self.compute_score(
             data_sources=data_sources,
             solution_strs=responses_str,

@@ -2,6 +2,7 @@
 import os
 import re
 import signal
+import threading
 from itertools import islice, zip_longest
 from math import isclose
 from typing import Optional
@@ -25,6 +26,11 @@ def timeout_ours(timeout_seconds: int = 8):
                 raise TimeoutError("Operation timed out!")
 
             def wrapper(*args, **kwargs):
+                # 检查是否在主线程中
+                if threading.current_thread() is not threading.main_thread():
+                    # 如果不在主线程中，直接执行函数，不设置超时
+                    return func(*args, **kwargs)
+                
                 old_handler = signal.getsignal(signal.SIGALRM)
                 signal.signal(signal.SIGALRM, handler)
                 signal.alarm(timeout_seconds)
@@ -504,8 +510,11 @@ class timeout:
         raise TimeoutError(self.error_message)
 
     def __enter__(self):
-        signal.signal(signal.SIGALRM, self.handle_timeout)
-        signal.alarm(self.seconds)
+        self.is_main_thread = threading.current_thread() is threading.main_thread()
+        
+        if self.is_main_thread:
+            signal.signal(signal.SIGALRM, self.handle_timeout)  # 主线程
+            signal.alarm(self.seconds)
 
     def __exit__(self, type, value, traceback):
         signal.alarm(0)

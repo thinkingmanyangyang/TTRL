@@ -526,8 +526,11 @@ class timeout:
         raise TimeoutError(self.error_message)
 
     def __enter__(self):
-        signal.signal(signal.SIGALRM, self.handle_timeout)
-        signal.alarm(self.seconds)
+        self.is_main_thread = threading.current_thread() is threading.main_thread()
+        
+        if self.is_main_thread:
+            signal.signal(signal.SIGALRM, self.handle_timeout)  # 主线程
+            signal.alarm(self.seconds)
 
     def __exit__(self, type, value, traceback):
         signal.alarm(0)

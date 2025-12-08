@@ -47,7 +47,24 @@ def apply_original_gt(batch):
     return batch
 
 
-def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer):
+def _ensure_extra_info(data_item):
+    """
+    确保 data_item 的 extra_info 字段存在且为字典。
+    
+    Args:
+        data_item: DataProtoItem 对象
+        
+    Returns:
+        extra_info 字典的引用
+    """
+    if "extra_info" not in data_item.non_tensor_batch:
+        data_item.non_tensor_batch["extra_info"] = {}
+    if not isinstance(data_item.non_tensor_batch["extra_info"], dict):
+        data_item.non_tensor_batch["extra_info"] = {}
+    return data_item.non_tensor_batch["extra_info"]
+
+
+def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer, process_reward_weight=0, process_reward_strategy="avg"):
     """
     Apply the majority vote ground truth to the batch.
     """
@@ -66,9 +83,15 @@ def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer):
             valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
             valid_response_ids = response_ids[:valid_response_length]
             response_str = tokenizer.decode(valid_response_ids, skip_special_tokens=True)
-            model_outputs.append(response_str)
+            # 保存文本和 token IDs（用于后续的 token-based LCS）
+            model_outputs.append({
+                'text': response_str,
+                'token_ids': valid_response_ids.tolist()
+            })
+            extra_info = _ensure_extra_info(data_item)
+            extra_info["solution_token_ids"] = valid_response_ids.tolist()
 
-    majority_gt_list, majority_ratio_list = _batch_majority_vote(model_outputs, n)
+    majority_gt_list, majority_ratio_list, majority_items_list = _batch_majority_vote(model_outputs, n)
     
     assert len(batch) == len(majority_gt_list), "batch length must be equal to the number of model outputs"
     
@@ -78,48 +101,99 @@ def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer):
         data_item.non_tensor_batch["reward_model"]["ground_truth"] = majority_gt_list[i]
         data_item.non_tensor_batch["reward_model"]["majority_gt"] = majority_gt_list[i]
         data_item.non_tensor_batch["reward_model"]["original_gt"] = original_gt
+        # 提取文本和 token IDs
+        majority_items = majority_items_list[i]
+        majority_texts = [item['text'] for item in majority_items]
+        majority_token_ids = [item['token_ids'] for item in majority_items]
+
+        data_item.non_tensor_batch["reward_model"]["majority_texts"] = majority_texts
+
+        # 将投票结果添加到 batch（prompt 级别）的 extra_info
+        extra_info = _ensure_extra_info(data_item)
+        extra_info["majority_texts"] = majority_texts
+        extra_info["majority_token_ids"] = majority_token_ids
+        extra_info["process_reward_weight"] = process_reward_weight
+        extra_info["process_reward_strategy"] = process_reward_strategy
+
+        start = i * n
+        for j in range(n):
+            gen_data_item = gen_batch_output[start + j]
+            extra_info = _ensure_extra_info(gen_data_item)
+            extra_info["majority_texts"] = majority_texts
+            extra_info["majority_token_ids"] = majority_token_ids
+            extra_info["process_reward_weight"] = process_reward_weight
+            extra_info["process_reward_strategy"] = process_reward_strategy
+
 
     batch.non_tensor_batch["majority_ratio_list"] = np.array(majority_ratio_list, dtype=float)
     return batch
 
 
-def _batch_majority_vote(model_outputs: List[str], n: int) -> tuple[List[str], List[float]]:
+def _batch_majority_vote(model_outputs: List[dict], n: int) -> tuple[List[str], List[float], List[List[dict]]]:
     """
     Used to generate the ground truth for TTRL.
     Input:
-        model_outputs: list of str
+        model_outputs: list of dict with 'text' and 'token_ids'
         n: int
     Output:
         majority_gt_list: list of str
         majority_ratio_list: list of float
+        majority_items_list: list of list of dict (每个prompt对应的多数答案的原始数据列表，包含text和token_ids)
     """
     majority_gt_list = []
     majority_ratio_list = []
+    majority_items_list = []
     assert len(model_outputs) % n == 0
     n_prompts = len(model_outputs) // n
     for i in range(n_prompts):
         prompt_outputs = model_outputs[i * n:(i + 1) * n]
-        prompt_majority_gt, prompt_majority_ratio = _majority_vote(prompt_outputs)
+        prompt_majority_gt, prompt_majority_ratio, prompt_majority_items = _majority_vote(prompt_outputs)
         majority_gt_list.append(prompt_majority_gt)
         majority_ratio_list.append(prompt_majority_ratio)
+        majority_items_list.append(prompt_majority_items)
         
-    return majority_gt_list, majority_ratio_list
+    return majority_gt_list, majority_ratio_list, majority_items_list
 
 
-def _majority_vote(model_outputs: List[str]) -> tuple[str, float]:
+def _majority_vote(model_outputs: List[dict]) -> tuple[str, float, List[dict]]:
+    """
+    Args:
+        model_outputs: List of dict with 'text' and 'token_ids'
+    Returns:
+        majority_answer: str
+        majority_ratio: float
+        majority_items: List of dict with 'text' and 'token_ids'
+    """
     assert len(model_outputs) > 0
-    model_answers = [extract_answer(generated_text) for generated_text in model_outputs]
-    model_answers = [answer for answer in model_answers if answer is not None]
-    model_answers = [simplify_expression_string(answer) for answer in model_answers]
+    
+    # 提取和简化答案，同时保留原始数据的映射关系
+    answer_to_items = {}  # 简化答案 -> 原始数据列表的映射
+    model_answers = []
+    
+    for output_item in model_outputs:
+        generated_text = output_item['text']
+        extracted_answer = extract_answer(generated_text)
+        if extracted_answer is not None:
+            simplified_answer = simplify_expression_string(extracted_answer)
+            model_answers.append(simplified_answer)
+            
+            # 记录该简化答案对应的原始数据（包含 text 和 token_ids）
+            if simplified_answer not in answer_to_items:
+                answer_to_items[simplified_answer] = []
+            answer_to_items[simplified_answer].append(output_item)
+    
     if len(model_answers) == 0:
-        return "None", 0.0
+        return "None", 0.0, []
     
     counter = Counter(model_answers)
     
     majority_answer, majority_count = counter.most_common(1)[0]
     majority_ratio = majority_count / len(model_outputs)
     
-    return majority_answer, majority_ratio
+    # 获取多数答案对应的所有原始数据（包含 text 和 token_ids）
+    majority_items = answer_to_items.get(majority_answer, [])
+    
+    return majority_answer, majority_ratio, majority_items
 
 
 # === Metrics Computation ===
