@@ -155,11 +155,11 @@ def reward_func(
                 if use_token_ids or use_texts:
                     lcs_similarity = compute_process_reward(
                         solution_str=solution_str,
-                        majority_texts=majority_texts[:8],
+                        majority_texts=majority_texts,
                         weight=1.0,  # 这里不使用 weight，只获取原始相似度
                         normalize=True,
                         solution_token_ids=solution_token_ids,  # 新增：优先使用 token IDs
-                        majority_token_ids_list=majority_token_ids[:8],  # 新增
+                        majority_token_ids_list=majority_token_ids,  # 新增
                         max_tokens=2000  # 性能优化：限制最大 token 长度
                     )
                     
