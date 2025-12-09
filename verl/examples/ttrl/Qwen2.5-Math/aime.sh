@@ -3,7 +3,7 @@ export RAY_DISABLE_DASHBOARD=1
 export RAY_START_ARGS="--include-dashboard=false"
 export SWANLAB_API_KEY="gYbI1egFijpdmf4K0uYoS"
 export WANDB_API_KEY="a552f7169e3e6889c5c9bb37306e265b0168ae02"
-export CUDA_VISIBLE_DEVICES="6,7"
+export CUDA_VISIBLE_DEVICES="2,3"
 #export VLLM_ATTENTION_BACKEND=XFORMERS
 unset VLLM_ATTENTION_BACKEND
 export VLLM_USE_V1=1
@@ -16,6 +16,7 @@ TIME_TAG=$(date +%H%M%S)
 TASK="AIME-TTT"
 BACKBONE="Qwen2.5-Math-1.5B"
 ADVANTAGE="grpo"
+PROCESS_REWARD="lcs-0.2avg-nlp"
 
 K=3
 MAX_PROMPT_LENGTH=512
@@ -31,7 +32,9 @@ DATA_TRAIN_BATCH_SIZE=8
 N_VOTES_PER_PROMPT=64
 N_SAMPLES_PER_PROMPT=32
 MINI_BATCH_SIZE=1
-MICRO_BATCH_SIZE=2
+MICRO_BATCH_SIZE=1
+PROCESS_REWARD_WEIGHT=0.2
+PROCESS_REWARD_STRATEGY="avg"
 
 DATA_LOCAL_DIR="/data/yangzhenfei/TTRL/verl/data"
 BACKBONE_PATH="/data/yangzhenfei/llm_checkpoint/${BACKBONE}"
@@ -40,8 +43,8 @@ MODEL="${TASK}-${BACKBONE}"
 EXPERIMENT="TTRL-Len@${K}k"
 
 WANDB_PROJECT="TTRL-verl"
-LOG_NAME="${DATE}-${EXPERIMENT}-${MODEL}-${ADVANTAGE}"
-OUTPUT_DIR="checkpoints/${WANDB_PROJECT}/${MODEL}/${DATE}/${EXPERIMENT}-${ADVANTAGE}-${TIME_TAG}"
+LOG_NAME="${DATE}-${EXPERIMENT}-${MODEL}-${ADVANTAGE}-${PROCESS_REWARD}"
+OUTPUT_DIR="checkpoints/${WANDB_PROJECT}/${MODEL}/${DATE}/${EXPERIMENT}-${ADVANTAGE}-${PROCESS_REWARD}-${TIME_TAG}"
 
 # ------------------------------------------------------------
 python -m verl.trainer.main_ppo \
@@ -73,7 +76,7 @@ python -m verl.trainer.main_ppo \
   actor_rollout_ref.rollout.free_cache_engine=False \
   actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$MICRO_BATCH_SIZE \
   actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-  actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+  actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
   actor_rollout_ref.rollout.n=$N_SAMPLES_PER_PROMPT \
   actor_rollout_ref.rollout.val_kwargs.do_sample=True \
   actor_rollout_ref.rollout.val_kwargs.n=$N \
@@ -91,10 +94,13 @@ python -m verl.trainer.main_ppo \
   algorithm.kl_ctrl.kl_coef=0.00 \
   algorithm.adv_estimator=$ADVANTAGE \
   custom_reward_function.path="./verl/utils/reward_score/ttrl_math/__init__.py" \
-  custom_reward_function.name=reward_func \
+  custom_reward_function.name=reward_func_batch \
+  reward_model.reward_manager=batch \
   ttrl.enable=True \
   ttrl.n_votes_per_prompt=$N_VOTES_PER_PROMPT \
   ttrl.n_samples_per_prompt=$N_SAMPLES_PER_PROMPT \
+  ttrl.process_reward_weight=$PROCESS_REWARD_WEIGHT \
+  ttrl.process_reward_strategy=$PROCESS_REWARD_STRATEGY \
   trainer.logger=['console','swanlab'] \
   trainer.project_name=$WANDB_PROJECT \
   trainer.experiment_name=$LOG_NAME \

@@ -40,12 +40,19 @@ This code is adapted from: Dr. GRPO (https://github.com/sail-sg/understand-r1-ze
 def timeout_ours(timeout_seconds: int = 8):
     if os.name == "posix":
         import signal
+        import threading
 
         def decorator(func):
             def handler(signum, frame):
                 raise TimeoutError("Operation timed out!")
 
             def wrapper(*args, **kwargs):
+                # 检测是否在主线程，如果不在主线程则跳过 timeout
+                if threading.current_thread() is not threading.main_thread():
+                    # 子线程中：直接执行，不使用 signal timeout
+                    return func(*args, **kwargs)
+                
+                # 主线程中：使用 signal timeout
                 old_handler = signal.getsignal(signal.SIGALRM)
                 signal.signal(signal.SIGALRM, handler)
                 signal.alarm(timeout_seconds)

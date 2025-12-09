@@ -58,6 +58,35 @@ class BatchRewardManager:
         ground_truths = [item.non_tensor_batch["reward_model"].get("ground_truth", None) for item in data]
         data_sources = data.non_tensor_batch[self.reward_fn_key]
         extras = data.non_tensor_batch.get("extra_info", [None] * len(data))
+        
+        # 关键修复：将 solution_token_ids 添加到 extras
+        for i in range(len(data)):
+            valid_len = valid_response_lengths[i]
+            valid_response_ids = response_ids[i][:valid_len]
+            
+            # 确保 extras[i] 是字典
+            if extras[i] is None:
+                extras[i] = {}
+            if not isinstance(extras[i], dict):
+                extras[i] = {}
+            
+            # 添加 solution_token_ids
+            extras[i]["solution_token_ids"] = valid_response_ids.tolist()
+        
+        # # 简化调试：只输出关键信息和前几个token
+        # if len(data) > 0 and isinstance(extras[0], dict):
+        #     has_solution = 'solution_token_ids' in extras[0]
+        #     has_majority = 'majority_token_ids' in extras[0]
+        #     print(f"[DEBUG] BatchRewardManager - solution_ids: {has_solution}, majority_ids: {has_majority}")
+        #     if has_solution:
+        #         sol_ids = extras[0]['solution_token_ids']
+        #         print(f"[DEBUG]   solution_token_ids: len={len(sol_ids)}, first_5={sol_ids[:5]}")
+        #     if has_majority:
+        #         maj_ids = extras[0]['majority_token_ids']
+        #         maj_count = len(maj_ids)
+        #         first_len = len(maj_ids[0]) if maj_count > 0 else 0
+        #         first_5 = maj_ids[0][:5] if maj_count > 0 and first_len > 0 else []
+        #         print(f"[DEBUG]   majority_token_ids: count={maj_count}, first_group_len={first_len}, first_5={first_5}")
 
         scores = self.compute_score(
             data_sources=data_sources,

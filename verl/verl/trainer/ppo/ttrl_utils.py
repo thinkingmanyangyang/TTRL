@@ -35,6 +35,18 @@ def select_top_k_per_prompt(data, n_votes_per_prompt, n_samples_per_prompt):
 # === Ground Truth Manipulation ===
 
 
+def _ensure_extra_info(data_item):
+    """
+    Ensure that `data_item.non_tensor_batch["extra_info"]` exists and is a dict.
+    Returns the `extra_info` dict.
+    """
+    if "extra_info" not in data_item.non_tensor_batch:
+        data_item.non_tensor_batch["extra_info"] = {}
+    if not isinstance(data_item.non_tensor_batch["extra_info"], dict):
+        data_item.non_tensor_batch["extra_info"] = {}
+    return data_item.non_tensor_batch["extra_info"]
+
+
 def apply_original_gt(batch):
     """
     Apply the original ground truth to the batch.
@@ -47,15 +59,32 @@ def apply_original_gt(batch):
     return batch
 
 
-def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer):
+def apply_ttrl_gt(
+    batch,
+    gen_batch_output,
+    n,
+    tokenizer,
+    process_reward_weight: float = 1.0,
+    process_reward_strategy: str = "avg",
+):
     """
-    Apply the majority vote ground truth to the batch.
+    Apply the majority vote ground truth to the batch and attach extra
+    information for process reward computation.
+
+    The function will:
+    - collect all generated responses (text + token_ids) for majority voting
+    - write the majority-voted ground truth back to `batch`
+    - store majority texts / token ids and process-reward configs into
+      `reward_model` and `extra_info`
+    - attach per-sample `solution_token_ids` and majority info into
+      `gen_batch_output`, which will later be merged into `batch` via
+      `batch.union(gen_batch_output)` in the trainer.
     """
     assert len(gen_batch_output) % n == 0, "gen_batch_output length must be divisible by n"
     num_prompts = len(gen_batch_output) // n
     assert len(batch) == num_prompts, "batch length must be equal to the number of prompts"
 
-    model_outputs = []  
+    model_outputs = []
     for i in range(num_prompts):
         start = i * n
         for j in range(n):
@@ -66,12 +95,18 @@ def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer):
             valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
             valid_response_ids = response_ids[:valid_response_length]
             response_str = tokenizer.decode(valid_response_ids, skip_special_tokens=True)
-            model_outputs.append(response_str)
 
-    majority_gt_list, majority_ratio_list = _batch_majority_vote(model_outputs, n)
-    
+            # record text + token ids for majority vote
+            model_outputs.append({"text": response_str, "token_ids": valid_response_ids.tolist()})
+
+            # per-sample solution token ids (for token-based process reward)
+            extra_info = _ensure_extra_info(data_item)
+            extra_info["solution_token_ids"] = valid_response_ids.tolist()
+
+    majority_gt_list, majority_ratio_list, majority_items_list = _batch_majority_vote(model_outputs, n)
+
     assert len(batch) == len(majority_gt_list), "batch length must be equal to the number of model outputs"
-    
+
     for i in range(num_prompts):
         data_item = batch[i]
         original_gt = data_item.non_tensor_batch["reward_model"]["ground_truth"]
@@ -79,47 +114,106 @@ def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer):
         data_item.non_tensor_batch["reward_model"]["majority_gt"] = majority_gt_list[i]
         data_item.non_tensor_batch["reward_model"]["original_gt"] = original_gt
 
+        # majority texts & token ids for this prompt (only answers matching majority vote)
+        majority_items = majority_items_list[i]
+        majority_texts = [item["text"] for item in majority_items]
+        majority_token_ids = [item["token_ids"] for item in majority_items]
+
+        # keep a copy under reward_model for logging/metrics
+        data_item.non_tensor_batch["reward_model"]["majority_texts"] = majority_texts
+
+        # store voting result and process-reward config in prompt-level extra_info
+        extra_info = _ensure_extra_info(data_item)
+        extra_info["majority_texts"] = majority_texts
+        extra_info["majority_token_ids"] = majority_token_ids
+        extra_info["process_reward_weight"] = process_reward_weight
+        extra_info["process_reward_strategy"] = process_reward_strategy
+
+        # also propagate majority info to all generated samples of this prompt
+        start = i * n
+        for j in range(n):
+            gen_data_item = gen_batch_output[start + j]
+            gen_extra_info = _ensure_extra_info(gen_data_item)
+            gen_extra_info["majority_texts"] = majority_texts
+            gen_extra_info["majority_token_ids"] = majority_token_ids
+            gen_extra_info["process_reward_weight"] = process_reward_weight
+            gen_extra_info["process_reward_strategy"] = process_reward_strategy
+
     batch.non_tensor_batch["majority_ratio_list"] = np.array(majority_ratio_list, dtype=float)
     return batch
 
 
-def _batch_majority_vote(model_outputs: List[str], n: int) -> tuple[List[str], List[float]]:
+def _batch_majority_vote(
+    model_outputs: List[dict],
+    n: int,
+) -> tuple[List[str], List[float], List[List[dict]]]:
     """
     Used to generate the ground truth for TTRL.
-    Input:
-        model_outputs: list of str
-        n: int
-    Output:
+
+    Args:
+        model_outputs: list of dict with keys {"text", "token_ids"}
+        n: number of votes per prompt
+
+    Returns:
         majority_gt_list: list of str
         majority_ratio_list: list of float
+        majority_items_list: list of list[dict] (per prompt majority members)
     """
-    majority_gt_list = []
-    majority_ratio_list = []
+    majority_gt_list: List[str] = []
+    majority_ratio_list: List[float] = []
+    majority_items_list: List[List[dict]] = []
     assert len(model_outputs) % n == 0
     n_prompts = len(model_outputs) // n
     for i in range(n_prompts):
-        prompt_outputs = model_outputs[i * n:(i + 1) * n]
-        prompt_majority_gt, prompt_majority_ratio = _majority_vote(prompt_outputs)
+        prompt_outputs = model_outputs[i * n : (i + 1) * n]
+        prompt_majority_gt, prompt_majority_ratio, prompt_majority_items = _majority_vote(prompt_outputs)
         majority_gt_list.append(prompt_majority_gt)
         majority_ratio_list.append(prompt_majority_ratio)
-        
-    return majority_gt_list, majority_ratio_list
+        majority_items_list.append(prompt_majority_items)
+
+    return majority_gt_list, majority_ratio_list, majority_items_list
 
 
-def _majority_vote(model_outputs: List[str]) -> tuple[str, float]:
+def _majority_vote(model_outputs: List[dict]) -> tuple[str, float, List[dict]]:
+    """
+    Perform majority vote over a list of generated outputs.
+
+    Args:
+        model_outputs: List of dicts with keys:
+            - "text": decoded response string
+            - "token_ids": List[int] for this response
+
+    Returns:
+        majority_answer: str
+        majority_ratio: float
+        majority_items: List[dict] (all outputs that vote for the majority answer)
+    """
     assert len(model_outputs) > 0
-    model_answers = [extract_answer(generated_text) for generated_text in model_outputs]
-    model_answers = [answer for answer in model_answers if answer is not None]
-    model_answers = [simplify_expression_string(answer) for answer in model_answers]
+
+    answer_to_items: dict[str, List[dict]] = {}
+    model_answers: List[str] = []
+
+    for output_item in model_outputs:
+        generated_text = output_item["text"]
+        extracted_answer = extract_answer(generated_text)
+        if extracted_answer is None:
+            continue
+        simplified_answer = simplify_expression_string(extracted_answer)
+        model_answers.append(simplified_answer)
+
+        if simplified_answer not in answer_to_items:
+            answer_to_items[simplified_answer] = []
+        answer_to_items[simplified_answer].append(output_item)
+
     if len(model_answers) == 0:
-        return "None", 0.0
-    
+        return "None", 0.0, []
+
     counter = Counter(model_answers)
-    
     majority_answer, majority_count = counter.most_common(1)[0]
     majority_ratio = majority_count / len(model_outputs)
-    
-    return majority_answer, majority_ratio
+    majority_items = answer_to_items.get(majority_answer, [])
+
+    return majority_answer, majority_ratio, majority_items
 
 
 # === Metrics Computation ===

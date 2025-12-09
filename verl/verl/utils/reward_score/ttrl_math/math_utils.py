@@ -2,6 +2,7 @@
 import os
 import re
 import signal
+import threading
 from itertools import islice, zip_longest
 from math import isclose
 from typing import Optional
@@ -19,12 +20,19 @@ from sympy.parsing.sympy_parser import parse_expr
 def timeout_ours(timeout_seconds: int = 8):
     if os.name == "posix":
         import signal
+        import threading
 
         def decorator(func):
             def handler(signum, frame):
                 raise TimeoutError("Operation timed out!")
 
             def wrapper(*args, **kwargs):
+                # 检测是否在主线程，如果不在主线程则跳过 timeout
+                if threading.current_thread() is not threading.main_thread():
+                    # 子线程中：直接执行，不使用 signal timeout
+                    return func(*args, **kwargs)
+                
+                # 主线程中：使用 signal timeout
                 old_handler = signal.getsignal(signal.SIGALRM)
                 signal.signal(signal.SIGALRM, handler)
                 signal.alarm(timeout_seconds)
@@ -499,16 +507,47 @@ class timeout:
     def __init__(self, seconds=1, error_message="Timeout"):
         self.seconds = seconds
         self.error_message = error_message
+        self.is_main_thread = None
+        self.old_handler = None
+        self.timeout_enabled = False
 
     def handle_timeout(self, signum, frame):
         raise TimeoutError(self.error_message)
 
     def __enter__(self):
-        signal.signal(signal.SIGALRM, self.handle_timeout)
-        signal.alarm(self.seconds)
-
-    def __exit__(self, type, value, traceback):
-        signal.alarm(0)
+        self.is_main_thread = threading.current_thread() is threading.main_thread()
+        
+        # 只在主线程且是 POSIX 系统时使用 signal
+        if self.is_main_thread and os.name == "posix":
+            try:
+                self.old_handler = signal.getsignal(signal.SIGALRM)
+                signal.signal(signal.SIGALRM, self.handle_timeout)
+                signal.alarm(self.seconds)
+                self.timeout_enabled = True
+            except (ValueError, OSError) as e:
+                # 如果 signal 不可用（非主线程或其他错误），静默跳过超时设置
+                # 这样可以避免错误，但失去了超时保护
+                self.timeout_enabled = False
+                # 可选：打印警告（如果需要调试）
+                # import warnings
+                # warnings.warn(f"Timeout not available in this context: {e}")
+        else:
+            # 非主线程或非 POSIX 系统，无法使用 signal
+            # 静默跳过，不设置超时
+            self.timeout_enabled = False
+        
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        # 只有在成功设置了 signal 的情况下才需要清理
+        if self.timeout_enabled and self.is_main_thread and os.name == "posix":
+            try:
+                signal.alarm(0)  # 取消定时器
+                if self.old_handler is not None:
+                    signal.signal(signal.SIGALRM, self.old_handler)  # 恢复原来的处理器
+            except (ValueError, OSError):
+                # 如果清理失败，静默忽略
+                pass
 
 
 def latex_eval(latex):

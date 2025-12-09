@@ -1142,7 +1142,11 @@ class RayPPOTrainer:
 
                             assert len(gen_batch_output) == len(batch) * self.config.ttrl.n_votes_per_prompt
 
-                            batch = apply_ttrl_gt(batch, gen_batch_output, self.config.ttrl.n_votes_per_prompt, self.tokenizer)
+                            # 从配置中读取过程奖励参数
+                            process_reward_weight = self.config.ttrl.get("process_reward_weight", 1.0)
+                            process_reward_strategy = self.config.ttrl.get("process_reward_strategy", "max")
+                            batch = apply_ttrl_gt(batch, gen_batch_output, self.config.ttrl.n_votes_per_prompt, self.tokenizer, 
+                                                process_reward_weight, process_reward_strategy)
                             gen_batch_output = select_top_k_per_prompt(gen_batch_output, self.config.ttrl.n_votes_per_prompt, self.config.ttrl.n_samples_per_prompt)
 
                             assert len(gen_batch_output) == len(batch) * self.config.ttrl.n_samples_per_prompt
