@@ -1,4 +1,9 @@
 #!/bin/bash
+export RAY_DISABLE_DASHBOARD=1
+export RAY_START_ARGS="--include-dashboard=false"
+export SWANLAB_API_KEY="gYbI1egFijpdmf4K0uYoS"
+export WANDB_API_KEY="a552f7169e3e6889c5c9bb37306e265b0168ae02"
+export CUDA_VISIBLE_DEVICES="6,7"
 #export VLLM_ATTENTION_BACKEND=XFORMERS
 unset VLLM_ATTENTION_BACKEND
 export VLLM_USE_V1=1
@@ -26,13 +31,20 @@ DATA_TRAIN_BATCH_SIZE=8
 N_VOTES_PER_PROMPT=64
 N_SAMPLES_PER_PROMPT=32
 MINI_BATCH_SIZE=1
-MICRO_BATCH_SIZE=2
+MICRO_BATCH_SIZE=1
 
-DATA_LOCAL_DIR="path/to/TTRL/verl/data"
-BACKBONE_PATH="path/to/${BACKBONE}"
+PROCESS_REWARD_WEIGHT=0.2
+PROCESS_REWARD_STRATEGY="avg"
+PROCESS_LCS_NORM="avg"
+PROCESS_LCS_MAX_TOKENS=3000
+USE_CONTRASTIVE_PROCESS_REWARD=False
+CONTRASTIVE_TEMPERATURE=0.1
+
+DATA_LOCAL_DIR="/caobing/biomedical/TTRL/verl/data"
+BACKBONE_PATH="/caobing/biomedical/llm_checkpoint/${BACKBONE}"
 
 MODEL="${TASK}-${BACKBONE}"
-EXPERIMENT="TTRL-Len@${K}k"
+EXPERIMENT="TTRL-Len@${K}k-process_reward_strategy:${PROCESS_REWARD_STRATEGY}-reward_weight:${PROCESS_REWARD_WEIGHT}-lcs_norm:${PROCESS_LCS_NORM}-lcs_max_tokens:${PROCESS_LCS_MAX_TOKENS}-use_contrastive:${USE_CONTRASTIVE_PROCESS_REWARD}-contrastive_temperature:${CONTRASTIVE_TEMPERATURE}"
 
 WANDB_PROJECT="TTRL-verl"
 LOG_NAME="${DATE}-${EXPERIMENT}-${MODEL}-${ADVANTAGE}"
@@ -68,7 +80,7 @@ python -m verl.trainer.main_ppo \
   actor_rollout_ref.rollout.free_cache_engine=False \
   actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$MICRO_BATCH_SIZE \
   actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-  actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+  actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
   actor_rollout_ref.rollout.n=$N_SAMPLES_PER_PROMPT \
   actor_rollout_ref.rollout.val_kwargs.do_sample=True \
   actor_rollout_ref.rollout.val_kwargs.n=$N \
@@ -86,14 +98,21 @@ python -m verl.trainer.main_ppo \
   algorithm.kl_ctrl.kl_coef=0.00 \
   algorithm.adv_estimator=$ADVANTAGE \
   custom_reward_function.path="./verl/utils/reward_score/ttrl_math/__init__.py" \
-  custom_reward_function.name=reward_func \
+  custom_reward_function.name=reward_func_batch \
+  reward_model.reward_manager=batch \
   ttrl.enable=True \
   ttrl.n_votes_per_prompt=$N_VOTES_PER_PROMPT \
   ttrl.n_samples_per_prompt=$N_SAMPLES_PER_PROMPT \
-  trainer.logger=['console','wandb'] \
+  ttrl.process_reward_weight=$PROCESS_REWARD_WEIGHT \
+  ttrl.process_reward_strategy=$PROCESS_REWARD_STRATEGY \
+  ttrl.process_lcs_norm=$PROCESS_LCS_NORM \
+  ttrl.process_lcs_max_tokens=$PROCESS_LCS_MAX_TOKENS \
+  ttrl.use_contrastive_process_reward=$USE_CONTRASTIVE_PROCESS_REWARD \
+  ttrl.contrastive_temperature=$CONTRASTIVE_TEMPERATURE \
+  trainer.logger=['console','swanlab'] \
   trainer.project_name=$WANDB_PROJECT \
   trainer.experiment_name=$LOG_NAME \
-  trainer.n_gpus_per_node=8 \
+  trainer.n_gpus_per_node=2 \
   trainer.nnodes=1 \
   trainer.save_freq=2000000 \
   trainer.test_freq=2 \

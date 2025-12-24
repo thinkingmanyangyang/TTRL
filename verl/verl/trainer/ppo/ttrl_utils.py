@@ -59,14 +59,35 @@ def _ensure_extra_info(data_item):
     """
     if "extra_info" not in data_item.non_tensor_batch:
         data_item.non_tensor_batch["extra_info"] = {}
-    if not isinstance(data_item.non_tensor_batch["extra_info"], dict):
+    elif not isinstance(data_item.non_tensor_batch["extra_info"], dict):
         data_item.non_tensor_batch["extra_info"] = {}
     return data_item.non_tensor_batch["extra_info"]
 
 
-def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer, process_reward_weight=0, process_reward_strategy="avg"):
+def apply_ttrl_gt(
+    batch, 
+    gen_batch_output, 
+    n, 
+    tokenizer, 
+    process_reward_weight=0, 
+    process_reward_strategy="avg", 
+    process_lcs_norm="avg",
+    process_lcs_max_tokens=3000,
+    use_contrastive_process_reward=False,
+    contrastive_temperature=0.1
+):
     """
     Apply the majority vote ground truth to the batch.
+    
+    Args:
+        batch: 批次数据
+        gen_batch_output: 生成的批次输出
+        n: 每个 prompt 的样本数
+        tokenizer: 分词器
+        process_reward_weight: 过程奖励的权重
+        process_reward_strategy: 过程奖励的组合策略（"sum" 或 "avg"）
+        process_lcs_norm: LCS 归一化策略（"max", "avg", "min", "l1", "l2"）
+        process_lcs_max_tokens: LCS 计算的最大 token 长度（性能优化）
     """
     assert len(gen_batch_output) % n == 0, "gen_batch_output length must be divisible by n"
     num_prompts = len(gen_batch_output) // n
@@ -88,8 +109,8 @@ def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer, process_reward_weight=0
                 'text': response_str,
                 'token_ids': valid_response_ids.tolist()
             })
-            extra_info = _ensure_extra_info(data_item)
-            extra_info["solution_token_ids"] = valid_response_ids.tolist()
+            # extra_info = _ensure_extra_info(data_item)
+            # extra_info["solution_token_ids"] = valid_response_ids.tolist()
 
     majority_gt_list, majority_ratio_list, majority_items_list = _batch_majority_vote(model_outputs, n)
     
@@ -114,19 +135,40 @@ def apply_ttrl_gt(batch, gen_batch_output, n, tokenizer, process_reward_weight=0
         extra_info["majority_token_ids"] = majority_token_ids
         extra_info["process_reward_weight"] = process_reward_weight
         extra_info["process_reward_strategy"] = process_reward_strategy
-
+        extra_info["process_lcs_norm"] = process_lcs_norm
+        extra_info["process_lcs_max_tokens"] = process_lcs_max_tokens
+        
+        # 🆕 收集这个 group 的所有 solution token_ids（用于对比学习）
         start = i * n
+        group_solution_token_ids = []
         for j in range(n):
-            gen_data_item = gen_batch_output[start + j]
-            extra_info = _ensure_extra_info(gen_data_item)
-            extra_info["majority_texts"] = majority_texts
-            extra_info["majority_token_ids"] = majority_token_ids
-            extra_info["process_reward_weight"] = process_reward_weight
-            extra_info["process_reward_strategy"] = process_reward_strategy
+            solution_token_ids = model_outputs[start + j]['token_ids']
+            group_solution_token_ids.append(solution_token_ids)
+        
+        # 🆕 对比学习字段
+        extra_info["use_contrastive_process_reward"] = use_contrastive_process_reward
+        extra_info["contrastive_temperature"] = contrastive_temperature
+        extra_info["group_solution_token_ids"] = group_solution_token_ids
+        extra_info["group_key"] = id(group_solution_token_ids)
 
+        # for j in range(n):
+        #     gen_data_item = gen_batch_output[start + j]
+            
+        #     extra_info = _ensure_extra_info(gen_data_item)
+            
+        #     extra_info["majority_texts"] = majority_texts
+        #     extra_info["majority_token_ids"] = majority_token_ids
+        #     extra_info["process_reward_weight"] = process_reward_weight
+        #     extra_info["process_reward_strategy"] = process_reward_strategy
+        #     extra_info["process_lcs_norm"] = process_lcs_norm
+        #     extra_info["process_lcs_max_tokens"] = process_lcs_max_tokens
+        #     # 🆕 对比学习字段
+        #     extra_info["use_contrastive_process_reward"] = use_contrastive_process_reward
+        #     extra_info["contrastive_temperature"] = contrastive_temperature
+        #     extra_info["group_solution_token_ids"] = group_solution_token_ids
 
     batch.non_tensor_batch["majority_ratio_list"] = np.array(majority_ratio_list, dtype=float)
-    return batch
+    return batch, gen_batch_output
 
 
 def _batch_majority_vote(model_outputs: List[dict], n: int) -> tuple[List[str], List[float], List[List[dict]]]:

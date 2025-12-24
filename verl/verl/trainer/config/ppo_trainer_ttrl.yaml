@@ -22,4 +22,24 @@ ttrl:
   # Process reward combination strategy: how to combine original_score and process_reward
   # "sum": final_score = original_score + weight * process_reward
   # "avg": final_score = weighted_avg(original_score, process_reward, weight)
+  # "neg": final_score = -1 + weight * process_reward
   process_reward_strategy: "avg"
+  
+  # LCS normalization strategy: how to compute the denominator for LCS normalization
+  # "max": use max(len1, len2)
+  # "avg": use (len1 + len2) / 2 (default)
+  # "min": use min(len1, len2)
+  # "l1": use len1 (first sequence length)
+  # "l2": use len2 (second sequence length)
+  process_lcs_norm: "avg"
+  
+  # Maximum token length for LCS computation (performance optimization)
+  process_lcs_max_tokens: 3000
+  
+  # 🆕 Contrastive learning-style process reward
+  # If enabled, process reward will use contrastive learning style instead of max LCS
+  use_contrastive_process_reward: false
+  
+  # Temperature parameter for contrastive learning (τ in SimCLR formula)
+  # Lower values (e.g., 0.07-0.1) make the model more discriminative
+  contrastive_temperature: 0.1

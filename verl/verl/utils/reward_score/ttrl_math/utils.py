@@ -131,16 +131,16 @@ def max_lcs_similarity_with_texts(
             score = lcs_similarity_score(target_str, ref_text, normalize=normalize)
             lcs_elapsed = time.time() - lcs_start
             
-            # 只打印慢计算（>0.1秒）
-            if lcs_elapsed > 0.1:
-                print(f"[PERF]   Text-LCS #{idx+1}/{len(reference_texts)} took {lcs_elapsed:.4f}s | "
-                      f"target_len={len(target_str)} ref_len={len(ref_text)} | score={score:.4f}", 
-                      flush=True)
+            # # 只打印慢计算（>0.1秒）
+            # if lcs_elapsed > 0.1:
+            #     print(f"[PERF]   Text-LCS #{idx+1}/{len(reference_texts)} took {lcs_elapsed:.4f}s | "
+            #           f"target_len={len(target_str)} ref_len={len(ref_text)} | score={score:.4f}", 
+            #           flush=True)
             
             max_score = max(max_score, score)
     
     total_time = time.time() - start_time
-    if total_time > 0.05:  # 只打印显著的计算
+    if total_time > 0.5:  # 只打印显著的计算
         print(f"[PERF]   Total Text-LCS time: {total_time:.4f}s for {len(reference_texts)} texts | "
               f"avg={total_time/len(reference_texts):.4f}s per text", flush=True)
     
@@ -172,7 +172,8 @@ def token_lcs_similarity(
     token_ids_1: List[int],
     token_ids_2: List[int],
     max_tokens: int = 1500,
-    normalize: bool = True
+    normalize: bool = True,
+    norm_strategy: str = "avg"
 ) -> float:
     """
     基于 token IDs 的 LCS 相似度。
@@ -182,6 +183,12 @@ def token_lcs_similarity(
         token_ids_2: 第二个序列的 token IDs
         max_tokens: 最大 token 长度（防止过长序列导致性能问题）
         normalize: 是否归一化到 [0, 1]
+        norm_strategy: 归一化策略
+            - "max": 使用两个序列长度的最大值
+            - "avg": 使用两个序列长度的平均值（默认）
+            - "min": 使用两个序列长度的最小值
+            - "l1": 使用第一个序列的长度
+            - "l2": 使用第二个序列的长度
     
     Returns:
         LCS 相似度分数 [0, 1]
@@ -189,8 +196,10 @@ def token_lcs_similarity(
     Examples:
         >>> ids1 = [100, 200, 300, 400]
         >>> ids2 = [100, 250, 300, 450]
-        >>> token_lcs_similarity(ids1, ids2)
+        >>> token_lcs_similarity(ids1, ids2, norm_strategy="avg")
         0.5  # LCS=[100, 300], len=2, avg_len=4
+        >>> token_lcs_similarity(ids1, ids2, norm_strategy="max")
+        0.5  # LCS=[100, 300], len=2, max_len=4
     """
     if not token_ids_1 or not token_ids_2:
         return 0.0
@@ -219,15 +228,29 @@ def token_lcs_similarity(
     if not normalize:
         return float(lcs_len)
     
-    # 归一化：LCS 长度 / 两个序列的平均长度
-    avg_len = (len(token_ids_1) + len(token_ids_2)) / 2.0
-    return lcs_len / avg_len if avg_len > 0 else 0.0
+    # 根据策略计算归一化分母
+    len1, len2 = len(token_ids_1), len(token_ids_2)
+    
+    if norm_strategy == "max":
+        norm_len = max(len1, len2)
+    elif norm_strategy == "min":
+        norm_len = min(len1, len2)
+    elif norm_strategy == "l1":
+        norm_len = len1
+    elif norm_strategy == "l2":
+        norm_len = len2
+    else:  # "avg" 或其他默认值
+        norm_len = (len1 + len2) / 2.0
+    
+    return lcs_len / norm_len if norm_len > 0 else 0.0
 
 
 def max_token_lcs_similarity(
     target_token_ids: List[int],
     reference_token_ids_list: List[List[int]],
-    max_tokens: int = 1500
+    max_tokens: int = 1500,
+    normalize: bool = True,
+    norm_strategy: str = "avg"
 ) -> float:
     """
     计算目标 token 序列与多个参考序列的最大 LCS 相似度。
@@ -237,6 +260,8 @@ def max_token_lcs_similarity(
         target_token_ids: 目标 token 序列
         reference_token_ids_list: 参考 token 序列列表
         max_tokens: 最大 token 长度
+        normalize: 是否归一化到 [0, 1]
+        norm_strategy: 归一化策略（"max", "avg", "min", "l1", "l2"）
     
     Returns:
         最大的 LCS 相似度分数 [0, 1]
@@ -254,7 +279,13 @@ def max_token_lcs_similarity(
     for idx, ref_ids in enumerate(reference_token_ids_list):
         if ref_ids:  # 跳过空序列
             lcs_start = time.time()
-            score = token_lcs_similarity(target_token_ids, ref_ids, max_tokens)
+            score = token_lcs_similarity(
+                target_token_ids, 
+                ref_ids, 
+                max_tokens=max_tokens, 
+                normalize=normalize,
+                norm_strategy=norm_strategy
+            )
             max_score = max(max_score, score)
     
     total_time = time.time() - start_time
@@ -272,50 +303,56 @@ def compute_process_reward(
     normalize: bool = True,
     solution_token_ids: Optional[List[int]] = None,
     majority_token_ids_list: Optional[List[List[int]]] = None,
-    max_tokens: int = 1500
+    max_tokens: int = 1500,
+    norm_strategy: str = "avg"
 ) -> float:
     """
     计算过程奖励：solution 与 majority_texts 的最大 LCS 相似度。
-    优先使用 token IDs（更快更准确），如果没有则使用文本。
+    仅使用 token IDs 进行计算（更快更准确）。
     
     Args:
-        solution_str: 当前模型的输出文本（fallback）
-        majority_texts: 多数投票的文本列表（fallback）
+        solution_str: 当前模型的输出文本（保留用于向后兼容，但不使用）
+        majority_texts: 多数投票的文本列表（保留用于向后兼容，但不使用）
         weight: 过程奖励的权重
         normalize: 是否归一化到 [0, 1]
-        solution_token_ids: 当前模型输出的 token IDs（推荐）
-        majority_token_ids_list: 多数投票的 token IDs 列表（推荐）
+        solution_token_ids: 当前模型输出的 token IDs（必需）
+        majority_token_ids_list: 多数投票的 token IDs 列表（必需）
         max_tokens: token 序列的最大长度（性能优化）
+        norm_strategy: 归一化策略（"max", "avg", "min", "l1", "l2"）
     
     Returns:
         过程奖励分数 [0, weight]
     
+    Raises:
+        ValueError: 如果没有提供 token IDs
+    
     Examples:
-        >>> # 使用 token IDs（推荐）
+        >>> # 使用 token IDs
         >>> solution_ids = [100, 200, 300]
         >>> majority_ids = [[100, 250, 300], [100, 200, 350]]
         >>> compute_process_reward(None, None, 1.0, True, solution_ids, majority_ids)
         0.75
     """
-    # 优先使用 token IDs（更快更准确）
-    if solution_token_ids is not None and majority_token_ids_list is not None:
-        if len(majority_token_ids_list) == 0:
-            return 0.0
-        max_similarity = max_token_lcs_similarity(
-            solution_token_ids,
-            majority_token_ids_list,
-            max_tokens=max_tokens
+    # 检查必需的 token IDs
+    if solution_token_ids is None or majority_token_ids_list is None:
+        raise ValueError(
+            "Token IDs are required for LCS computation. "
+            f"solution_token_ids is {'None' if solution_token_ids is None else 'provided'}, "
+            f"majority_token_ids_list is {'None' if majority_token_ids_list is None else 'provided'}. "
+            "Please ensure both solution_token_ids and majority_token_ids_list are passed to compute_process_reward."
         )
-        return max_similarity * weight
     
-    # Fallback：使用文本（向后兼容）
-    if majority_texts is None or len(majority_texts) == 0:
+    # 如果 majority_token_ids_list 为空列表，返回 0.0
+    if len(majority_token_ids_list) == 0:
         return 0.0
     
-    max_similarity = max_lcs_similarity_with_texts(
-        solution_str, 
-        majority_texts, 
-        normalize=normalize
+    # 使用 token IDs 计算 LCS 相似度
+    max_similarity = max_token_lcs_similarity(
+        solution_token_ids,
+        majority_token_ids_list,
+        max_tokens=max_tokens,
+        normalize=normalize,
+        norm_strategy=norm_strategy
     )
     
     return max_similarity * weight
