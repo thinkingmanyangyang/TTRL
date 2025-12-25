@@ -74,7 +74,8 @@ def apply_ttrl_gt(
     process_lcs_norm="avg",
     process_lcs_max_tokens=3000,
     use_contrastive_process_reward=False,
-    contrastive_temperature=0.1
+    contrastive_temperature=0.1,
+    n_samples_per_prompt=32  # 🆕 用于训练的样本数（用于负样本采样时排除训练样本）
 ):
     """
     Apply the majority vote ground truth to the batch.
@@ -82,12 +83,13 @@ def apply_ttrl_gt(
     Args:
         batch: 批次数据
         gen_batch_output: 生成的批次输出
-        n: 每个 prompt 的样本数
+        n: 每个 prompt 的投票样本数 (n_votes_per_prompt)
         tokenizer: 分词器
         process_reward_weight: 过程奖励的权重
         process_reward_strategy: 过程奖励的组合策略（"sum" 或 "avg"）
         process_lcs_norm: LCS 归一化策略（"max", "avg", "min", "l1", "l2"）
         process_lcs_max_tokens: LCS 计算的最大 token 长度（性能优化）
+        n_samples_per_prompt: 用于训练的样本数（负样本只从 indices >= n_samples_per_prompt 中采样）
     """
     assert len(gen_batch_output) % n == 0, "gen_batch_output length must be divisible by n"
     num_prompts = len(gen_batch_output) // n
@@ -150,6 +152,7 @@ def apply_ttrl_gt(
         extra_info["contrastive_temperature"] = contrastive_temperature
         extra_info["group_solution_token_ids"] = group_solution_token_ids
         extra_info["group_key"] = id(group_solution_token_ids)
+        extra_info["n_samples_per_prompt"] = n_samples_per_prompt  # 🆕 用于负样本采样时排除训练样本
 
         # for j in range(n):
         #     gen_data_item = gen_batch_output[start + j]

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from collections import defaultdict
 
 import torch
@@ -57,18 +58,25 @@ class BatchRewardManager:
 
         ground_truths = [item.non_tensor_batch["reward_model"].get("ground_truth", None) for item in data]
         data_sources = data.non_tensor_batch[self.reward_fn_key]
-        extras = data.non_tensor_batch.get("extra_info", [None] * len(data))
-
+        extras_raw = data.non_tensor_batch.get("extra_info", [None] * len(data))
+        
+        # 重要：由于 batch.repeat 使用浅拷贝，多个样本可能共享同一个 extra_info 字典
+        # 必须为每个样本创建独立的副本，避免 solution_token_ids 被覆盖
+        extras = []
         for i in range(len(data)):
             valid_len = valid_response_lengths[i]
             valid_response_ids = response_ids[i][:valid_len]
             
-            # 确保 extras[i] 是字典
-            if extras[i] is None:
-                extras[i] = {}
+            # 创建 extra_info 的深拷贝（如果存在）
+            if extras_raw[i] is None:
+                extra = {}
+            else:
+                # 深拷贝以避免共享引用问题
+                extra = copy.deepcopy(extras_raw[i])
 
-            # 添加 solution_token_ids
-            extras[i]["solution_token_ids"] = valid_response_ids.tolist()
+            # 添加当前样本的 solution_token_ids
+            extra["solution_token_ids"] = valid_response_ids.tolist()
+            extras.append(extra)
 
         scores = self.compute_score(
             data_sources=data_sources,

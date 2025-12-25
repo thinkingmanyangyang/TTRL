@@ -220,8 +220,10 @@ def reward_func(
                 res["score"] = final_score
             else:
                 # 原始分数已经是 1.0 或 process_reward_weight == 0，直接使用原始分数
-                res["score"] = original_score
+                final_score = original_score
+                res["score"] = final_score
             
+            # print(f"[DEBUG] final_score: {final_score}, original_score: {original_score}, lcs_similarity: {lcs_similarity}, process_reward_weight: {process_reward_weight}, process_reward_strategy: {process_reward_strategy}")
             # 保存详细信息用于分析
             res["original_score"] = original_score  # 原始正确性分数
             res["lcs_similarity"] = lcs_similarity  # LCS 相似度 (0-1)
@@ -338,23 +340,39 @@ def reward_func_batch(
                 if majority_token_ids is None or len(majority_token_ids) == 0:
                     continue
                 
+                # 🆕 获取 n_samples_per_prompt（用于训练的回复数量）
+                # 从 extra_info 中读取，或者使用 sample_indices 的长度作为近似
+                first_sample_idx = sample_indices[0] if sample_indices else 0
+                n_samples_per_prompt = extra_infos[first_sample_idx].get("n_samples_per_prompt", len(sample_indices))
+                n_votes_per_prompt = len(group_solution_token_ids)
+                
                 # 构建 majority_sets
                 majority_sets = [set(maj_ids) for maj_ids in majority_token_ids]
                 
-                # 收集负样本候选
+                # 🔥 只从未被选中的回复（indices n_samples_per_prompt 到 n_votes_per_prompt-1）中选择负样本
+                # 这样可以避免负样本与用于 GRPO 训练的回复重复
                 negative_candidates = []
-                for group_token_ids in group_solution_token_ids:
-                    # 只选择与 majority 不同的答案
+                negative_candidates_2 = []
+                for idx, group_token_ids in enumerate(group_solution_token_ids):
                     group_set = set(group_token_ids)
                     is_negative = all(group_set != maj_set for maj_set in majority_sets)
                     if is_negative:
-                        negative_candidates.append(group_token_ids)
+                        if idx >= n_samples_per_prompt:
+                            negative_candidates.append(group_token_ids)
+                        else:
+                            negative_candidates_2.append(group_token_ids)
+                
                 # 🔍 Debug: 输出负样本候选的数量
-                print(f"[DEBUG] Group {group_id}: negative_candidates length = {len(negative_candidates)}", flush=True)
-                # 采样负样本
-                # 直接选后面的几个negative
-                num_negatives = min(max_neg_samples, len(negative_candidates))
-                sampled_negatives = negative_candidates[-num_negatives:]
+                print(f"[DEBUG] Group {group_id}: negative_candidates from unselected={len(negative_candidates)} "
+                      f"(indices {n_samples_per_prompt}-{n_votes_per_prompt-1})", flush=True)
+                
+                # 采样负样本（从未被选中的回复中随机采样）
+                if len(negative_candidates) > max_neg_samples:
+                    sampled_negatives = random.sample(negative_candidates, max_neg_samples)
+                else:
+                    # 未选中的不够，用训练样本中的负样本补充
+                    needed = max_neg_samples - len(negative_candidates)
+                    sampled_negatives = negative_candidates + negative_candidates_2[:needed]
                 # 将采样的负样本添加到该 prompt 的所有 responses
                 for idx in sample_indices:
                     extra_infos[idx]["sampled_negative_token_ids"] = sampled_negatives

@@ -1160,7 +1160,8 @@ class RayPPOTrainer:
                                 process_lcs_norm,
                                 process_lcs_max_tokens,
                                 use_contrastive_process_reward,
-                                contrastive_temperature
+                                contrastive_temperature,
+                                self.config.ttrl.n_samples_per_prompt  # 🆕 用于负样本采样时排除训练样本
                             )
                             gen_batch_output = select_top_k_per_prompt(gen_batch_output, self.config.ttrl.n_votes_per_prompt, self.config.ttrl.n_samples_per_prompt)
 
