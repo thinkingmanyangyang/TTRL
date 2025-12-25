@@ -3,7 +3,7 @@ export RAY_DISABLE_DASHBOARD=1
 export RAY_START_ARGS="--include-dashboard=false"
 export SWANLAB_API_KEY="gYbI1egFijpdmf4K0uYoS"
 export WANDB_API_KEY="a552f7169e3e6889c5c9bb37306e265b0168ae02"
-export CUDA_VISIBLE_DEVICES="6,7"
+export CUDA_VISIBLE_DEVICES="0,1"
 #export VLLM_ATTENTION_BACKEND=XFORMERS
 unset VLLM_ATTENTION_BACKEND
 export VLLM_USE_V1=1
@@ -16,7 +16,7 @@ TIME_TAG=$(date +%H%M%S)
 TASK="AIME-TTT"
 BACKBONE="Qwen2.5-Math-1.5B"
 ADVANTAGE="grpo"
-PROCESS_REWARD="fix-neg-sample-contrastive:0.1-lcs-len:3000-norm:avg-max_all-bio"
+PROCESS_REWARD="true"
 
 K=3
 MAX_PROMPT_LENGTH=512
@@ -37,14 +37,14 @@ PROCESS_REWARD_WEIGHT=0.2
 PROCESS_REWARD_STRATEGY="avg"
 PROCESS_LCS_NORM="avg"
 PROCESS_LCS_MAX_TOKENS=3000
-USE_CONTRASTIVE_PROCESS_REWARD=True
+USE_CONTRASTIVE_PROCESS_REWARD=False
 CONTRASTIVE_TEMPERATURE=0.1
 
 DATA_LOCAL_DIR="/caobing/biomedical/TTRL/verl/data"
 BACKBONE_PATH="/caobing/biomedical/llm_checkpoint/${BACKBONE}"
 
 MODEL="${TASK}-${BACKBONE}"
-EXPERIMENT="TTRL-Len@${K}k"
+EXPERIMENT="TTRL-Len@${K}k-process_reward_strategy:${PROCESS_REWARD_STRATEGY}-reward_weight:${PROCESS_REWARD_WEIGHT}-lcs_norm:${PROCESS_LCS_NORM}-lcs_max_tokens:${PROCESS_LCS_MAX_TOKENS}-use_contrastive:${USE_CONTRASTIVE_PROCESS_REWARD}-contrastive_temperature:${CONTRASTIVE_TEMPERATURE}"
 
 WANDB_PROJECT="TTRL-verl"
 LOG_NAME="${DATE}-${EXPERIMENT}-${MODEL}-${ADVANTAGE}-${PROCESS_REWARD}"
@@ -109,7 +109,7 @@ python -m verl.trainer.main_ppo \
   ttrl.process_lcs_max_tokens=$PROCESS_LCS_MAX_TOKENS \
   ttrl.use_contrastive_process_reward=$USE_CONTRASTIVE_PROCESS_REWARD \
   ttrl.contrastive_temperature=$CONTRASTIVE_TEMPERATURE \
-  trainer.logger=['console','swanlab'] \
+  trainer.logger=['console'] \
   trainer.project_name=$WANDB_PROJECT \
   trainer.experiment_name=$LOG_NAME \
   trainer.n_gpus_per_node=2 \
