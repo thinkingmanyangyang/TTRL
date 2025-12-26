@@ -39,11 +39,10 @@ try:
                 if seq1[i-1] == seq2[j-1]:
                     curr[j] = prev[j-1] + 1
                 else:
-                    curr[j] = max(prev[j], curr[j-1])
+                    curr[j] = prev[j] if prev[j] > curr[j-1] else curr[j-1]
             
-            # 交换 prev 和 curr
+            # 交换 prev 和 curr（无需重置，下次迭代会覆盖）
             prev, curr = curr, prev
-            curr[:] = 0  # 重置 curr
         
         return prev[n]
     
